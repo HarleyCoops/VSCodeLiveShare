@@ -1,0 +1,59 @@
+{
+  "name": "vscodeliveshare",
+  "displayName": "VSCodeLiveShare",
+  "description": "A live connection to Gemini from your IDE",
+  "version": "0.0.1",
+  "engines": {
+    "vscode": "^1.99.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onCommand:gemini.startSession",
+    "*"
+  ],
+  "main": "./extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "gemini.startSession",
+        "title": "Start Gemini Live Share"
+      },
+      {
+        "command": "vscodeliveshare.startGeminiSession",
+        "title": "VSCodeLiveShare: Start Gemini Session"
+      },
+      {
+        "command": "vscodeliveshare.test",
+        "title": "VSCodeLiveShare: Test Command"
+      }
+    ],
+    "inlineCompletions": [
+      {
+        "*": {
+          "provider": "gemini.inline"
+        }
+      }
+    ]
+  },
+  "scripts": {
+    "lint": "eslint .",
+    "pretest": "npm run lint",
+    "test": "vscode-test",
+    "compile": "echo 'No compilation needed for JavaScript'"
+  },
+  "devDependencies": {
+    "@types/mocha": "^10.0.10",
+    "@types/node": "20.x",
+    "@types/vscode": "^1.99.0",
+    "@vscode/test-cli": "^0.0.10",
+    "@vscode/test-electron": "^2.4.1",
+    "eslint": "^9.23.0"
+  },
+  "dependencies": {
+    "@google/genai": "^0.10.0",
+    "dotenv": "^16.5.0",
+    "ws": "^8.18.1"
+  }
+}
