@@ -204,26 +204,12 @@ async function startSession(context) {
 	  vscode.window.showInformationMessage('Gemini Live Share session started.');
 	  ws.send(
 		JSON.stringify({
-		  setup: {
-			model: "gemini-2.0-flash-live-001",
-			response_modalities: ["TEXT"]
-		  }
+		  model: "gemini-2.0-flash-live-001",
+		  response_modalities: ["TEXT"]
 		})
 	  );
 	  activeWebSocket = ws;
 	  reconnectAttempts = 0; // Reset reconnect attempts on successful connection
-	  
-	  // Set up heartbeat to keep connection alive
-	  if (heartbeatInterval) {
-		clearInterval(heartbeatInterval);
-	  }
-	  heartbeatInterval = setInterval(() => {
-		if (ws.readyState === WebSocket.OPEN) {
-		  console.log('Sending heartbeat ping...');
-		  // Send a minimal ping message to keep the connection alive
-		  ws.ping();
-		}
-	  }, 30000); // Send heartbeat every 30 seconds
 	  
 	  // Flush any queued messages if you implement queuing
 	});
