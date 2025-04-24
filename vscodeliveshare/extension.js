@@ -377,12 +377,13 @@ function sendEditorSnapshot(context) {
 
   activeWebSocket.send(
 	JSON.stringify({
-	  generateContentRequest: {
-		contents: [
+	  clientContent: {
+		turns: [
 		  { role: 'user', parts: [{ text: systemPrompt(fileUri) }] },
 		  { role: 'model', parts: [{ text: "Understood. Send the code snippet."}] }, // Simulate model turn for context
 		  { role: 'user', parts: [{ text: snippet }] }
-		]
+		],
+		turnComplete: true
 	  }
 	})
   );
@@ -453,20 +454,18 @@ function sendGeminiCommand(command, document, range, selectedText, context) {
             return;
           }
           
-          if (msg.generateContentResponse && msg.generateContentResponse.candidates && 
-              msg.generateContentResponse.candidates.length > 0) {
-            const candidate = msg.generateContentResponse.candidates[0];
-            
-            if (candidate.content && candidate.content.parts && candidate.content.parts.length > 0) {
-              const delta = candidate.content.parts[0].text;
-              if (delta) {
-                responseBuffer += delta;
+          if (msg.serverContent && msg.serverContent.modelTurn) {
+            const modelTurn = msg.serverContent.modelTurn;
+            if (modelTurn.parts && modelTurn.parts.length > 0) {
+              const part = modelTurn.parts[0];
+              if (part.text) {
+                responseBuffer += part.text;
                 progress.report({ increment: 10, message: 'Receiving response...' });
               }
             }
             
             // Check if this is the final message
-            if (candidate.finishReason === 'STOP') {
+            if (msg.serverContent.turnComplete || msg.serverContent.generationComplete) {
               activeWebSocket.removeListener('message', messageHandler);
               resolve(responseBuffer);
             }
@@ -482,13 +481,11 @@ function sendGeminiCommand(command, document, range, selectedText, context) {
       
       // Send the request
       activeWebSocket.send(JSON.stringify({
-        generateContentRequest: {
-          contents: [
+        clientContent: {
+          turns: [
             { role: 'user', parts: [{ text: prompt }] }
           ],
-          generationConfig: {
-            responseSchema: responseSchema
-          }
+          turnComplete: true
         }
       }));
     });
@@ -568,19 +565,22 @@ function sendGeminiCommand(command, document, range, selectedText, context) {
 
 // Function to handle incoming messages from Gemini
 async function handleGemini(msg) {
-  // console.log('Handling Gemini message:', msg); // Can be noisy, uncomment if needed
-  if (msg.generateContentResponse && msg.generateContentResponse.candidates && msg.generateContentResponse.candidates.length > 0) {
-	const candidate = msg.generateContentResponse.candidates[0];
-	if (candidate.content && candidate.content.parts && candidate.content.parts.length > 0) {
-		const delta = candidate.content.parts[0].text;
-		if (delta) {
-			appendInline(delta);
-		}
-	}
-	// TODO: Handle finishReason if needed (e.g., STOP, MAX_TOKENS)
+  console.log('Handling Gemini message:', JSON.stringify(msg)); // Log the full message for debugging
+  
+  if (msg.serverContent && msg.serverContent.modelTurn) {
+    // Handle server content with model turn
+    const modelTurn = msg.serverContent.modelTurn;
+    if (modelTurn.parts && modelTurn.parts.length > 0) {
+      const part = modelTurn.parts[0];
+      if (part.text) {
+        appendInline(part.text);
+      }
+    }
   } else if (msg.error) {
-	console.error('Gemini API Error:', msg.error);
-	vscode.window.showErrorMessage(`Gemini Error: ${msg.error.message || 'Unknown error'}`);
+    console.error('Gemini API Error:', msg.error);
+    vscode.window.showErrorMessage(`Gemini Error: ${msg.error.message || 'Unknown error'}`);
+  } else if (msg.setupComplete) {
+    console.log('Setup complete, ready to send messages');
   }
 }
 
