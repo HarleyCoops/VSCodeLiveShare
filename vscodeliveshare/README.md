@@ -29,7 +29,7 @@ This extension contributes the following settings:
 
 ## Known Issues
 
-Calling out known issues can help limit users opening duplicate issues against your extension.
+- **WebSocket Connection Issue**: The extension currently has difficulty maintaining a persistent WebSocket connection to the Gemini Live API. This may cause interruptions in the live coding assistance features. We are actively investigating this issue.
 
 ## Release Notes
 

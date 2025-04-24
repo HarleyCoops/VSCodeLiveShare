@@ -9,6 +9,10 @@ let activeWebSocket = null; // Variable to hold the active WebSocket connection
 let debounceTimer = null; // For debouncing text changes
 let liveBuffer = ''; // Buffer to hold incoming text deltas for inline completion
 let lastCompletionPosition = null; // Track where the completion was requested
+let reconnectTimer = null; // Timer for reconnection attempts
+let heartbeatInterval = null; // Interval for sending heartbeats
+const MAX_RECONNECT_ATTEMPTS = 5; // Maximum number of reconnection attempts
+let reconnectAttempts = 0; // Current number of reconnection attempts
 
 // Load environment variables from .env file
 config({ path: path.join(__dirname, '.env') });
@@ -57,7 +61,7 @@ function activate(context) {
 	  // Trigger immediately if the selection changes in the active editor
 	  if (event.textEditor === vscode.window.activeTextEditor) {
 		console.log('Selection changed, sending snapshot.');
-		sendEditorSnapshot(); // Consider debouncing this too if it becomes too noisy
+		sendEditorSnapshot(context); // Consider debouncing this too if it becomes too noisy
 	  }
 	})
   );
@@ -68,7 +72,7 @@ function activate(context) {
 	  // Trigger if the saved document is the one in the active editor
 	  if (vscode.window.activeTextEditor && vscode.window.activeTextEditor.document === document) {
 		console.log('Document saved, sending snapshot.');
-		sendEditorSnapshot();
+		sendEditorSnapshot(context);
 	  }
 	})
   );
@@ -83,7 +87,7 @@ function activate(context) {
 		}
 		debounceTimer = setTimeout(() => {
 		  console.log('Document changed (debounced), sending snapshot.');
-		  sendEditorSnapshot();
+		  sendEditorSnapshot(context);
 		  debounceTimer = null;
 		}, 300); // 300ms debounce delay
 	  }
@@ -139,13 +143,13 @@ function activate(context) {
   // Register the fix and explain commands
   context.subscriptions.push(
 	vscode.commands.registerCommand('gemini.fixCode', (document, range, selectedText) => {
-	  sendGeminiCommand('fix', document, range, selectedText);
+	  sendGeminiCommand('fix', document, range, selectedText, context);
 	})
   );
 
   context.subscriptions.push(
 	vscode.commands.registerCommand('gemini.explainCode', (document, range, selectedText) => {
-	  sendGeminiCommand('explain', document, range, selectedText);
+	  sendGeminiCommand('explain', document, range, selectedText, context);
 	})
   );
 
@@ -209,12 +213,34 @@ async function startSession(context) {
 		})
 	  );
 	  activeWebSocket = ws;
+	  reconnectAttempts = 0; // Reset reconnect attempts on successful connection
+	  
+	  // Set up heartbeat to keep connection alive
+	  if (heartbeatInterval) {
+		clearInterval(heartbeatInterval);
+	  }
+	  heartbeatInterval = setInterval(() => {
+		if (ws.readyState === WebSocket.OPEN) {
+		  console.log('Sending heartbeat ping...');
+		  // Send a minimal ping message to keep the connection alive
+		  ws.ping();
+		}
+	  }, 30000); // Send heartbeat every 30 seconds
+	  
 	  // Flush any queued messages if you implement queuing
 	});
 
 	ws.on('message', (buf) => {
 	  console.log('Received message from Gemini:', buf.toString());
 	  handleGemini(JSON.parse(buf.toString()));
+	});
+	
+	// Handle ping messages from the server
+	ws.on('ping', (data) => {
+	  console.log('Received ping from server, sending pong...');
+	  if (ws.readyState === WebSocket.OPEN) {
+		ws.pong(data);
+	  }
 	});
 
 	ws.on('error', (error) => {
@@ -244,9 +270,40 @@ async function startSession(context) {
 	  if (reason) {
 		console.warn('Close reason:', reason.toString('utf8'));
 	  }
-	  vscode.window.showInformationMessage('Gemini Live Share session closed.');
+	  
+	  // Clear heartbeat interval
+	  if (heartbeatInterval) {
+		clearInterval(heartbeatInterval);
+		heartbeatInterval = null;
+	  }
+	  
 	  if (activeWebSocket === ws) {
 		activeWebSocket = null;
+		
+		// Attempt to reconnect if not a normal closure (code 1000)
+		// and we haven't exceeded max reconnect attempts
+		if (code !== 1000 && reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
+		  reconnectAttempts++;
+		  const delay = Math.min(1000 * Math.pow(2, reconnectAttempts), 30000); // Exponential backoff with max 30s
+		  
+		  vscode.window.showInformationMessage(
+			`Gemini Live Share session closed unexpectedly. Reconnecting in ${delay/1000} seconds... (Attempt ${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})`
+		  );
+		  
+		  // Clear any existing reconnect timer
+		  if (reconnectTimer) {
+			clearTimeout(reconnectTimer);
+		  }
+		  
+		  // Set up reconnect timer
+		  reconnectTimer = setTimeout(() => {
+			console.log(`Attempting to reconnect (${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})...`);
+			startSession(context);
+			reconnectTimer = null;
+		  }, delay);
+		} else {
+		  vscode.window.showInformationMessage('Gemini Live Share session closed.');
+		}
 	  }
 	});
 
@@ -258,12 +315,14 @@ async function startSession(context) {
 }
 
 // Function to send a user turn
-function sendUserTurn(message) {
-  if (activeWebSocket && activeWebSocket.readyState === WebSocket.OPEN) {
+function sendUserTurn(message, context) {
+  if (checkConnection(context)) {
     console.log('WebSocket is open. Sending user turn...');
     activeWebSocket.send(JSON.stringify(message));
+    return true;
   } else {
     console.error('WebSocket not open! State:', activeWebSocket ? activeWebSocket.readyState : 'NO SOCKET');
+    return false;
   }
 }
 
@@ -287,9 +346,26 @@ Do not leak context between different files shown to you.`;
 }
 
 
-// Function to send the current editor state to the active WebSocket
-function sendEditorSnapshot() {
+// Function to check WebSocket connection and reconnect if needed
+function checkConnection(context) {
   if (!activeWebSocket || activeWebSocket.readyState !== WebSocket.OPEN) {
+    console.log('WebSocket not open, attempting to reconnect...');
+    if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
+      startSession(context);
+    } else {
+      console.error(`Maximum reconnection attempts (${MAX_RECONNECT_ATTEMPTS}) reached.`);
+      vscode.window.showErrorMessage(
+        `Failed to maintain connection to Gemini Live API after ${MAX_RECONNECT_ATTEMPTS} attempts. Please try starting a new session.`
+      );
+    }
+    return false;
+  }
+  return true;
+}
+
+// Function to send the current editor state to the active WebSocket
+function sendEditorSnapshot(context) {
+  if (!checkConnection(context)) {
     console.error('WebSocket not open! State:', activeWebSocket ? activeWebSocket.readyState : 'NO SOCKET');
     return;
   }
@@ -337,8 +413,8 @@ function appendInline(delta) {
 }
 
 // Function to send a specific command to Gemini (fix or explain)
-function sendGeminiCommand(command, document, range, selectedText) {
-  if (!activeWebSocket || activeWebSocket.readyState !== WebSocket.OPEN) {
+function sendGeminiCommand(command, document, range, selectedText, context) {
+  if (!checkConnection(context)) {
     vscode.window.showErrorMessage('Gemini Live Share session not active. Please start a session first.');
     return;
   }
@@ -526,14 +602,32 @@ async function handleGemini(msg) {
 // This method is called when your extension is deactivated
 function deactivate() {
   console.log('Deactivating Gemini Live Share extension.');
+  
+  // Clean up WebSocket connection
   if (activeWebSocket) {
-	console.log('Closing active WebSocket connection.');
-	activeWebSocket.close();
-	activeWebSocket = null;
+    console.log('Closing active WebSocket connection.');
+    activeWebSocket.close();
+    activeWebSocket = null;
   }
+  
+  // Clean up timers and intervals
   if (debounceTimer) {
-	  clearTimeout(debounceTimer);
+    clearTimeout(debounceTimer);
+    debounceTimer = null;
   }
+  
+  if (reconnectTimer) {
+    clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+  }
+  
+  if (heartbeatInterval) {
+    clearInterval(heartbeatInterval);
+    heartbeatInterval = null;
+  }
+  
+  // Reset reconnect attempts
+  reconnectAttempts = 0;
 }
 
 module.exports = {
