@@ -1,0 +1,54 @@
+{
+    "telemetry.macMachineId": "38befb5ce8eb4c50a33bd42f0c34bbe3492059527a8c1e6827b0bc39a2f99b5e",
+    "telemetry.machineId": "1f718a66dd9a802ced7f9a0ac206aad6b5b88b021424c7bc7509f695c5862cf6",
+    "telemetry.sqmId": "{D1161E8B-5939-460F-8713-A7B2ECEC68F2}",
+    "telemetry.devDeviceId": "47c0727c-ffa3-443a-ac3b-1364d7730659",
+    "backupWorkspaces": {
+        "workspaces": [],
+        "folders": [],
+        "emptyWindows": []
+    },
+    "windowControlHeight": 35,
+    "theme": "vs-dark",
+    "themeBackground": "#1a1a1a",
+    "windowSplash": {
+        "zoomLevel": 0,
+        "baseTheme": "vs-dark",
+        "colorInfo": {
+            "foreground": "rgba(204, 204, 204, 0.87)",
+            "background": "#1a1a1a",
+            "editorBackground": "#1a1a1a",
+            "titleBarBackground": "#141414",
+            "titleBarBorder": "rgba(255, 255, 255, 0.05)",
+            "activityBarBackground": "#141414",
+            "sideBarBackground": "#141414",
+            "sideBarBorder": "rgba(255, 255, 255, 0.05)",
+            "statusBarBackground": "#141414",
+            "statusBarBorder": "rgba(255, 255, 255, 0.05)",
+            "statusBarNoFolderBackground": "#141414"
+        }
+    },
+    "windowsState": {
+        "lastActiveWindow": {
+            "folder": "file:///c%3A/Users/chris/VSCodeLiveShare/vscodeliveshare",
+            "uiState": {
+                "mode": 1,
+                "x": -1360,
+                "y": 280,
+                "width": 800,
+                "height": 520
+            }
+        },
+        "lastPluginDevelopmentHostWindow": {
+            "folder": "file:///c%3A/Users/chris/VSCodeLiveShare/vscodeliveshare",
+            "uiState": {
+                "mode": 1,
+                "x": -1360,
+                "y": 280,
+                "width": 800,
+                "height": 520
+            }
+        },
+        "openedWindows": []
+    }
+}

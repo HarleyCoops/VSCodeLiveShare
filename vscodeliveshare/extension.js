@@ -3,6 +3,7 @@
 const vscode = require('vscode');
 const WebSocket = require('ws');
 const { config } = require('dotenv');
+const path = require('path');
 
 let activeWebSocket = null; // Variable to hold the active WebSocket connection
 let debounceTimer = null; // For debouncing text changes
@@ -10,13 +11,19 @@ let liveBuffer = ''; // Buffer to hold incoming text deltas for inline completio
 let lastCompletionPosition = null; // Track where the completion was requested
 
 // Load environment variables from .env file
-config();
+config({ path: path.join(__dirname, '.env') });
+console.log("Loaded GEMINI_API_KEY:", process.env.GEMINI_API_KEY);
 
 // Construct the Live API URL using the API key from environment variables
 const LIVE_URL =
   'wss://generativelanguage.googleapis.com/ws/' +
   'google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent' +
   `?key=${process.env.GEMINI_API_KEY || 'AIza...'}`; // Use placeholder if key not set
+
+// Add global uncaught exception handler for debugging
+process.on('uncaughtException', (err) => {
+  console.error('Uncaught exception:', err);
+});
 
 /**
  * @param {vscode.ExtensionContext} context
@@ -185,22 +192,24 @@ async function startSession(context) {
   const wsUrl = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=${apiKey}`;
 
   try {
-	const ws = new WebSocket(wsUrl, { headers: { 'Origin': 'https://developers.google.com' } });
+	console.log('About to connect to Gemini Live WebSocket...');
+	const ws = new WebSocket(wsUrl);
 
 	ws.on('open', () => {
-	  console.log('Gemini Live Share WebSocket connection opened.');
+	  console.log('WebSocket connection opened! Sending setup message...');
 	  vscode.window.showInformationMessage('Gemini Live Share session started.');
-	  // Mandatory first frame: StartSession
 	  ws.send(
 		JSON.stringify({
-		  startRequest: {
-			model: 'gemini-2.5-pro-live', // Or the model you intend to use
-			audioConfig: { enable: false },
-			videoConfig: { enable: false }
+		  setup: {
+			model: "gemini-2.0-flash-live-001",
+			config: {
+			  response_modalities: ["TEXT"]
+			}
 		  }
 		})
 	  );
-	  activeWebSocket = ws; // Assign to module variable instead of context state
+	  activeWebSocket = ws;
+	  // Flush any queued messages if you implement queuing
 	});
 
 	ws.on('message', (buf) => {
@@ -210,16 +219,33 @@ async function startSession(context) {
 
 	ws.on('error', (error) => {
 	  console.error('Gemini WebSocket error:', error);
+	  if (error && typeof error === 'object') {
+		if ('code' in error) {
+		  console.error('Error code:', error.code);
+		}
+		if ('message' in error) {
+		  console.error('Error message:', error.message);
+		}
+		if ('stack' in error) {
+		  console.error('Error stack:', error.stack);
+		}
+	  }
 	  vscode.window.showErrorMessage(`Gemini WebSocket error: ${error.message}`);
-	  if (activeWebSocket === ws) { // Check if it's the current socket before nulling
+	  if (activeWebSocket === ws) {
 		activeWebSocket = null;
 	  }
 	});
 
 	ws.on('close', (code, reason) => {
-	  console.log(`Gemini WebSocket closed: ${code} - ${reason}`);
+	  console.warn('Gemini WebSocket closed:', { code, reason: reason && reason.toString('utf8') });
+	  if (code !== undefined) {
+		console.warn('Close code:', code);
+	  }
+	  if (reason) {
+		console.warn('Close reason:', reason.toString('utf8'));
+	  }
 	  vscode.window.showInformationMessage('Gemini Live Share session closed.');
-	  if (activeWebSocket === ws) { // Check if it's the current socket before nulling
+	  if (activeWebSocket === ws) {
 		activeWebSocket = null;
 	  }
 	});
@@ -227,7 +253,17 @@ async function startSession(context) {
   } catch (error) {
 	console.error('Failed to create WebSocket:', error);
 	vscode.window.showErrorMessage(`Failed to start Gemini session: ${error.message}`);
-	activeWebSocket = null; // Ensure it's null on creation failure
+	activeWebSocket = null;
+  }
+}
+
+// Function to send a user turn
+function sendUserTurn(message) {
+  if (activeWebSocket && activeWebSocket.readyState === WebSocket.OPEN) {
+    console.log('WebSocket is open. Sending user turn...');
+    activeWebSocket.send(JSON.stringify(message));
+  } else {
+    console.error('WebSocket not open! State:', activeWebSocket ? activeWebSocket.readyState : 'NO SOCKET');
   }
 }
 
@@ -253,16 +289,15 @@ Do not leak context between different files shown to you.`;
 
 // Function to send the current editor state to the active WebSocket
 function sendEditorSnapshot() {
+  if (!activeWebSocket || activeWebSocket.readyState !== WebSocket.OPEN) {
+    console.error('WebSocket not open! State:', activeWebSocket ? activeWebSocket.readyState : 'NO SOCKET');
+    return;
+  }
   // Clear the buffer whenever we send a new snapshot, as the context has changed
   liveBuffer = '';
   lastCompletionPosition = vscode.window.activeTextEditor?.selection.active; // Reset position too
   console.log("Cleared live buffer and reset position on new snapshot send.");
 
-
-  if (!activeWebSocket || activeWebSocket.readyState !== WebSocket.OPEN) {
-	console.log('WebSocket not open, skipping snapshot send.');
-	return;
-  }
 
   const editor = vscode.window.activeTextEditor;
   if (!editor) {
