@@ -204,8 +204,9 @@ async function startSession(context) {
 	  vscode.window.showInformationMessage('Gemini Live Share session started.');
 	  ws.send(
 		JSON.stringify({
-		  model: "gemini-2.0-flash-live-001",
-		  response_modalities: ["TEXT"]
+		  setup: {
+			model: "gemini-2.0-flash-live-001"
+		  }
 		})
 	  );
 	  activeWebSocket = ws;
