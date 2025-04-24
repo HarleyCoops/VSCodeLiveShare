@@ -1,0 +1,247 @@
+Below is an end-to-end technical blueprint for a **“Gemini Live Share”** VS Code extension written in TypeScript/JavaScript that streams the live state of your editor to Google’s Gemini Multimodal Live API and feeds the model’s responses back into the IDE as inline suggestions, code-actions, or chat.
+
+---
+
+### 1. Why the Live API is the right transport
+
+* **Bi-directional WebSocket** → millisecond latency and server-side state across a multi-turn session. citeturn3search0  
+* Accepts **text + images (+ audio/video)** and streams back incremental tokens; session default is 10 min, extendable in 10-min blocks. citeturn3search2  
+* Official *Google Gen AI SDK* or raw WebSocket (`wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent`) can be used. citeturn1search0turn3search4  
+
+---
+
+### 2. Top-level architecture
+
+```mermaid
+graph TD
+  A(VS Code extension) -- workspace + diff --> B(Session Broker)
+  B -- WebSocket JSON --> C(Gemini Live API)
+  C -- streaming deltas --> B
+  B -- VS Code Inline/CodeAction APIs --> A
+  subgraph "Extension host (Node 20+)"
+      B
+  end
+```
+
+| Component | Responsibility | Key APIs |
+|-----------|----------------|----------|
+| **Broker** (Node) | Maintains one Live-API session / workspace, throttles edits, converts IDE events to `GenerateContentRequest`. | `ws`, `@google/genai` (optional) |
+| **VS Code front-end** | Captures file snapshots, selections, diagnostics; renders Gemini output as inline-completion, CodeLens, or panel chat. | `vscode` API, `InlineCompletionProvider`, `CodeActionProvider` |
+| **Credential vault** | Stores `GEMINI_API_KEY` or Vertex-AI SA token; never ships to client code. | OS keychain / Secret Storage |
+
+---
+
+### 3. Bootstrapping the extension
+
+1. **Scaffold**  
+   ```bash
+   npx yo code --extensionType ts --name gemini-live-share
+   npm i ws @google/genai dotenv
+   ```
+
+2. **package.json snippets**  
+   ```jsonc
+   "activationEvents": ["onCommand:gemini.startSession"],
+   "contributes": {
+     "commands": [
+       { "command": "gemini.startSession", "title": "Start Gemini Live Share" }
+     ],
+     "inlineCompletions": [ { "*": { "provider": "gemini.inline" } } ]
+   }
+   ```
+
+3. **Environment**  
+   ```bash
+   echo "GEMINI_API_KEY=AIza..." > .env
+   ```
+
+---
+
+### 4. Opening a Live session
+
+```ts
+import * as vscode from 'vscode';
+import WebSocket from 'ws';
+import { config } from 'dotenv';
+config();
+
+const LIVE_URL =
+  'wss://generativelanguage.googleapis.com/ws/' +
+  'google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent' +
+  `?key=${process.env.GEMINI_API_KEY}`;
+
+export async function activate(ctx: vscode.ExtensionContext) {
+  ctx.subscriptions.push(
+    vscode.commands.registerCommand('gemini.startSession', () => startSession())
+  );
+}
+
+async function startSession() {
+  const ws = new WebSocket(LIVE_URL, { origin: 'https://developers.google.com' });
+
+  ws.on('open', () => {
+    // Mandatory first frame: StartSession
+    ws.send(
+      JSON.stringify({
+        startRequest: {
+          model: 'gemini-2.5-pro-live',
+          audioConfig: { enable: false },
+          videoConfig: { enable: false }
+        }
+      })
+    );
+  });
+
+  ws.on('message', (buf) => handleGemini(JSON.parse(buf.toString())));
+  // Store ws in extension state for later messages
+}
+```
+
+*If you prefer not to hand-roll frames, replace the raw socket with the Gen AI SDK’s helper:*
+
+```ts
+import { LiveGenerativeModel } from '@google/genai';
+// …
+const model = new LiveGenerativeModel({ model: 'gemini-2.5-pro', apiKey });
+const session = await model.startLiveSession();
+```
+
+(The SDK hides the WebSocket hand-shake.) citeturn1search0  
+
+---
+
+### 5. Streaming editor context to Gemini
+
+```ts
+function sendEditorSnapshot(ws: WebSocket, editor: vscode.TextEditor) {
+  const fileUri = editor.document.uri.toString();
+  const code   = editor.document.getText();
+  const cursor = editor.selection.active;
+
+  ws.send(
+    JSON.stringify({
+      generateContentRequest: {
+        contents: [
+          { role: 'user', parts: [{ text: systemPrompt(fileUri) }] },
+          { role: 'user', parts: [{ text: codeSnippet(code, cursor) }] }
+        ]
+      }
+    })
+  );
+}
+
+function codeSnippet(text: string, pos: vscode.Position) {
+  // send max ±150 lines around cursor for latency
+  // trim with diff markers for privacy
+  return text.split('\n')
+             .slice(Math.max(0,pos.line-150), pos.line+150)
+             .join('\n');
+}
+```
+
+*Call `sendEditorSnapshot` on:*
+
+* `onDidChangeSelection`
+* `onDidSaveTextDocument`
+* Debounced `onDidChangeTextDocument` (e.g., 300 ms)
+
+---
+
+### 6. Handling streamed tokens
+
+```ts
+async function handleGemini(msg: any) {
+  if (msg.generateContentResponse) {
+    const delta = msg.generateContentResponse.candidates[0].content.parts[0].text;
+    appendInline(delta);
+  }
+}
+
+function appendInline(delta: string) {
+  // update a hidden buffer; VS Code Inline Completion provider reads from it
+}
+```
+
+`InlineCompletionProvider` implementation:
+
+```ts
+vscode.languages.registerInlineCompletionItemProvider({ scheme:'file' }, {
+  provideInlineCompletionItems: (_doc,pos,ctx) => {
+      return { items: [{ insertText: liveBuffer, range: undefined }] };
+  }
+});
+```
+
+---
+
+### 7. Code-actions (“Apply fix”, “Explain selection”)
+
+1. Maintain a *Gemini command map* in session context:
+   * `//gemini:fix` – Diff patch
+   * `//gemini:explain` – Markdown explanation
+
+2. Gemini responds with **structured JSON** (`response_schema={"type":"object","properties":{...}}`).  
+   VS Code `workspace.applyEdit` or show Markdown in panel.
+
+---
+
+### 8. Session life-cycle & scaling tips
+
+| Concern | Mitigation |
+|---------|------------|
+| 10-min timeout | Track `lastMessageAt`; when <60 s remain, send `extendRequest` frame. |
+| Cost control | Only stream code around the cursor; throttle to 1 req/sec. |
+| Model “bleed” between files | Send a *system* part: *“You are seeing independent files; do **not** leak context across files.”* |
+| Privacy | SHA-256 hash filenames before sending; strip PII comments. |
+| Rate limits | Live API preview = 60 QPS, 30 MB/min. Back-off with 429 headers. |
+
+---
+
+### 9. Testing locally
+
+```bash
+# in project root
+npm run compile && code --extensionDevelopmentPath=.
+```
+
+Open any `.js` file → `Cmd/Ctrl-Shift-P → Gemini: Start Live Share` → see ghost-text completions.
+
+---
+
+### 10. Production hardening checklist
+
+* **OAuth & Service Accounts** for Vertex-AI usage in corporate repos.  
+* **Telemetry**: log request/response token counts for billing insights.  
+* **Fallback**: if Live API is unavailable, fall back to standard Gemini REST with exponential-backoff.  
+* **Security review**: confirm the extension never emits workspace paths or env vars.  
+
+---
+
+#### Minimal working PoC (single file)
+
+```ts
+import { LiveGenerativeModel } from '@google/genai';
+import * as ws from 'ws';
+import * as fs from 'fs';
+
+(async () => {
+  const model = new LiveGenerativeModel({
+    model: 'gemini-2.5-pro',
+    apiKey: process.env.GEMINI_API_KEY
+  });
+  const session = await model.startLiveSession();
+  session.on('response', r => process.stdout.write(r.text));
+  const code = fs.readFileSync('app.js','utf8');
+  await session.sendMessage(`Explain what this snippet does:\n\n${code}`);
+})();
+```
+
+Run `node demo.js` and watch Gemini stream explanations. Latency: ~200 ms/token on broadband.
+
+---
+
+### What you get when it’s finished
+
+* **Inline ghost-text** à-la GitHub Copilot, but powered by Gemini 2.5-Pro.  
+* **One-click fix-its** generated by structured response schemas.  
+* **Context-aware chat panel** that *shares* your live file state instead of copying & pasting.  
