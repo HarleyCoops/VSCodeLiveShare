@@ -206,9 +206,7 @@ async function startSession(context) {
 		JSON.stringify({
 		  setup: {
 			model: "gemini-2.0-flash-live-001",
-			config: {
-			  response_modalities: ["TEXT"]
-			}
+			response_modalities: ["TEXT"]
 		  }
 		})
 	  );
