@@ -4,6 +4,7 @@ const vscode = require('vscode');
 const WebSocket = require('ws');
 const { config } = require('dotenv');
 const path = require('path');
+const fs = require('fs');
 
 let activeWebSocket = null; // Variable to hold the active WebSocket connection
 let debounceTimer = null; // For debouncing text changes
@@ -13,16 +14,26 @@ let reconnectTimer = null; // Timer for reconnection attempts
 let heartbeatInterval = null; // Interval for sending heartbeats
 const MAX_RECONNECT_ATTEMPTS = 5; // Maximum number of reconnection attempts
 let reconnectAttempts = 0; // Current number of reconnection attempts
+let terminalOutputBuffer = ''; // Buffer to hold terminal output
+let activeTerminal = null; // Reference to the active terminal
+let terminalDataListener = null; // Terminal data event listener
 
 // Load environment variables from .env file
-config({ path: path.join(__dirname, '.env') });
-console.log("Loaded GEMINI_API_KEY:", process.env.GEMINI_API_KEY);
+const envPath = path.join(__dirname, '.env');
+if (fs.existsSync(envPath)) {
+  config({ path: envPath });
+  console.log("Loaded GEMINI_API_KEY from extension directory");
+} else {
+  // Try to load from project root as fallback
+  config({ path: path.join(__dirname, '..', '.env') });
+  console.log("Loaded GEMINI_API_KEY from project root");
+}
 
 // Construct the Live API URL using the API key from environment variables
 const LIVE_URL =
   'wss://generativelanguage.googleapis.com/ws/' +
   'google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent' +
-  `?key=${process.env.GEMINI_API_KEY || 'AIza...'}`; // Use placeholder if key not set
+  `?key=${process.env.GEMINI_API_KEY || 'AIza...'}`;
 
 // Add global uncaught exception handler for debugging
 process.on('uncaughtException', (err) => {
@@ -41,7 +52,7 @@ function activate(context) {
   
   // Show a more visible activation message - make it persistent
   vscode.window.showInformationMessage('ACTIVATION TEST: Gemini Live Share extension is now active!', 'OK');
-  console.log('Congratulations, your extension "gemini-live-share" is now active!');
+  console.log('Congratulations, your extension \"gemini-live-share\" is now active!');
 
   // Register the commands to start a session
   context.subscriptions.push(
@@ -51,6 +62,16 @@ function activate(context) {
   // Register an alternative command with the extension's name as prefix
   context.subscriptions.push(
     vscode.commands.registerCommand('vscodeliveshare.startGeminiSession', () => startSession(context))
+  );
+
+  // Register command to start terminal monitoring
+  context.subscriptions.push(
+    vscode.commands.registerCommand('gemini.startTerminalMonitoring', () => startTerminalMonitoring(context))
+  );
+
+  // Register command to stop terminal monitoring
+  context.subscriptions.push(
+    vscode.commands.registerCommand('gemini.stopTerminalMonitoring', () => stopTerminalMonitoring(context))
   );
 
   // --- Event Listeners for Streaming Context ---
@@ -92,6 +113,19 @@ function activate(context) {
 		}, 300); // 300ms debounce delay
 	  }
 	})
+  );
+
+  // 4. On Terminal Creation
+  context.subscriptions.push(
+    vscode.window.onDidOpenTerminal((terminal) => {
+      console.log(`Terminal opened: ${terminal.name}`);
+      // If terminal monitoring is active, switch to the new terminal
+      if (activeTerminal) {
+        stopTerminalMonitoring(context);
+        activeTerminal = terminal;
+        startTerminalMonitoring(context);
+      }
+    })
   );
 
   // --- Code Action Provider ---
@@ -160,7 +194,7 @@ function activate(context) {
 	  // and the request position is at the end of where the last completion started.
 	  // More sophisticated logic might be needed (e.g., check context.triggerKind)
 	  if (liveBuffer && lastCompletionPosition && position.isEqual(lastCompletionPosition.with(undefined, lastCompletionPosition.character + liveBuffer.length))) {
-		console.log(`Providing inline completion: "${liveBuffer}" at ${position.line}:${position.character}`);
+		console.log(`Providing inline completion: \"${liveBuffer}\" at ${position.line}:${position.character}`);
 		return {
 		  items: [{
 			insertText: liveBuffer,
@@ -286,52 +320,113 @@ async function startSession(context) {
 			startSession(context);
 			reconnectTimer = null;
 		  }, delay);
-		} else {
-		  vscode.window.showInformationMessage('Gemini Live Share session closed.');
+		} else if (code !== 1000) {
+		  vscode.window.showErrorMessage(
+			`Gemini Live Share session closed unexpectedly. Maximum reconnection attempts (${MAX_RECONNECT_ATTEMPTS}) reached. Please start a new session manually.`
+		  );
 		}
 	  }
 	});
-
+	
+	// Set up a heartbeat to keep the connection alive
+	// The Gemini Live API has a default timeout of 10 minutes
+	heartbeatInterval = setInterval(() => {
+	  if (ws.readyState === WebSocket.OPEN) {
+		console.log('Sending heartbeat to keep connection alive...');
+		ws.send(JSON.stringify({ extendRequest: {} }));
+	  } else {
+		console.warn('Cannot send heartbeat, WebSocket not open. State:', ws.readyState);
+		clearInterval(heartbeatInterval);
+		heartbeatInterval = null;
+	  }
+	}, 9 * 60 * 1000); // Send heartbeat every 9 minutes (just before the 10-minute timeout)
+	
   } catch (error) {
-	console.error('Failed to create WebSocket:', error);
-	vscode.window.showErrorMessage(`Failed to start Gemini session: ${error.message}`);
-	activeWebSocket = null;
+	console.error('Error starting Gemini Live session:', error);
+	vscode.window.showErrorMessage(`Failed to start Gemini Live Share session: ${error.message}`);
   }
 }
 
-// Function to send a user turn
-function sendUserTurn(message, context) {
-  if (checkConnection(context)) {
-    console.log('WebSocket is open. Sending user turn...');
-    activeWebSocket.send(JSON.stringify(message));
-    return true;
-  } else {
-    console.error('WebSocket not open! State:', activeWebSocket ? activeWebSocket.readyState : 'NO SOCKET');
-    return false;
+// Function to start monitoring the active terminal
+async function startTerminalMonitoring(context) {
+  if (!checkConnection(context)) {
+    vscode.window.showErrorMessage('Gemini Live Share session not active. Please start a session first.');
+    return;
+  }
+
+  // Get the active terminal or create one if none exists
+  activeTerminal = vscode.window.activeTerminal;
+  if (!activeTerminal) {
+    activeTerminal = vscode.window.createTerminal('Gemini Monitored Terminal');
+    activeTerminal.show();
+  }
+
+  // Clear the terminal output buffer
+  terminalOutputBuffer = '';
+
+  // Create a terminal data event listener
+  if (!terminalDataListener) {
+    // Use the Terminal.onDidWriteData API to capture terminal output
+    // Note: This requires the proposed API to be enabled
+    try {
+      terminalDataListener = activeTerminal.onDidWriteData((data) => {
+        // Append the data to the buffer
+        terminalOutputBuffer += data;
+        
+        // Debounce sending the terminal output to Gemini
+        if (debounceTimer) {
+          clearTimeout(debounceTimer);
+        }
+        debounceTimer = setTimeout(() => {
+          sendTerminalSnapshot(context);
+          debounceTimer = null;
+        }, 500); // 500ms debounce delay
+      });
+      
+      vscode.window.showInformationMessage(`Now monitoring terminal: ${activeTerminal.name}`);
+    } catch (error) {
+      console.error('Error setting up terminal monitoring:', error);
+      vscode.window.showErrorMessage(`Failed to start terminal monitoring: ${error.message}`);
+    }
   }
 }
 
-// Function to create a snippet of code around the cursor position
-function codeSnippet(text, pos) {
-  // send max ±150 lines around cursor for latency
-  // trim with diff markers for privacy (TODO: Implement actual diff markers/PII stripping)
-  const lines = text.split('\n');
-  const startLine = Math.max(0, pos.line - 150);
-  const endLine = Math.min(lines.length, pos.line + 151); // +151 because slice is exclusive of end
-  return lines.slice(startLine, endLine).join('\n');
+// Function to stop monitoring the terminal
+function stopTerminalMonitoring(context) {
+  if (terminalDataListener) {
+    terminalDataListener.dispose();
+    terminalDataListener = null;
+    terminalOutputBuffer = '';
+    vscode.window.showInformationMessage('Terminal monitoring stopped.');
+  }
 }
 
-// Function to create a system prompt (basic version for now)
-function systemPrompt(fileUri) {
-  // TODO: Implement filename hashing for privacy if needed
-  return `You are an expert coding assistant integrated into a VS Code extension.
-You are seeing a snapshot of the file '${fileUri}'.
-Provide concise and relevant code suggestions or explanations based on the user's current cursor position and the surrounding code.
-Do not leak context between different files shown to you.`;
+// Function to send the terminal output to Gemini
+function sendTerminalSnapshot(context) {
+  if (!checkConnection(context) || !activeTerminal) {
+    return;
+  }
+
+  console.log(`Sending terminal snapshot (length: ${terminalOutputBuffer.length})`);
+
+  activeWebSocket.send(
+    JSON.stringify({
+      clientContent: {
+        turns: [
+          { 
+            role: 'user', 
+            parts: [{ 
+              text: `This is terminal output from my VS Code terminal. Please analyze it and provide insights or help with any errors:\n\n${terminalOutputBuffer}` 
+            }] 
+          }
+        ],
+        turnComplete: true
+      }
+    })
+  );
 }
 
-
-// Function to check WebSocket connection and reconnect if needed
+// Function to check if the WebSocket connection is active
 function checkConnection(context) {
   if (!activeWebSocket || activeWebSocket.readyState !== WebSocket.OPEN) {
     console.log('WebSocket not open, attempting to reconnect...');
@@ -389,13 +484,33 @@ function sendEditorSnapshot(context) {
   );
 }
 
+// Function to create a system prompt for the given file
+function systemPrompt(fileUri) {
+  // Hash the filename for privacy if needed
+  const filename = fileUri.split('/').pop();
+  
+  return `You are an AI coding assistant integrated into VS Code. You are seeing code from the file "${filename}".
+Your task is to provide helpful inline completions, fix code issues, and explain code when requested.
+Respond with concise, relevant suggestions that match the coding style and context.
+Do not leak context between different files or requests.`;
+}
+
+// Function to extract a relevant code snippet around the cursor
+function codeSnippet(text, pos) {
+  // Send max ±150 lines around cursor for latency and privacy
+  const lines = text.split('\n');
+  const startLine = Math.max(0, pos.line - 150);
+  const endLine = Math.min(lines.length, pos.line + 150);
+  
+  return lines.slice(startLine, endLine).join('\n');
+}
 
 // Function to append incoming text deltas to the live buffer
 function appendInline(delta) {
   liveBuffer += delta;
   // Note: We might need a mechanism to clear the buffer, e.g., on new snapshot send or cursor move away.
   // For now, it just accumulates.
-  console.log(`Live buffer updated: "${liveBuffer}"`);
+  console.log(`Live buffer updated: \"${liveBuffer}\"`);
 }
 
 // Function to send a specific command to Gemini (fix or explain)
@@ -587,6 +702,12 @@ async function handleGemini(msg) {
 // This method is called when your extension is deactivated
 function deactivate() {
   console.log('Deactivating Gemini Live Share extension.');
+  
+  // Stop terminal monitoring
+  if (terminalDataListener) {
+    terminalDataListener.dispose();
+    terminalDataListener = null;
+  }
   
   // Clean up WebSocket connection
   if (activeWebSocket) {
