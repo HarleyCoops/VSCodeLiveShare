@@ -11,8 +11,127 @@ This extension provides a seamless bridge between your local development environ
 *   **Live Inline Completions:** Get real-time code suggestions ("ghost text") as you type, powered by Gemini's understanding of your current file and cursor position.
 *   **Contextual Code Actions:** Trigger specific Gemini actions on selected code or diagnostics (e.g., automatically apply fixes, generate explanations).
 *   **Integrated Chat Panel:** Interact with Gemini in a dedicated panel that shares the live state of your active editor, providing highly relevant assistance.
+*   **Terminal Monitoring:** Monitor terminal output and get AI insights on commands and their results.
 *   **Low Latency:** Leverages the Gemini Live API's bi-directional WebSocket for millisecond-level interaction.
-*   **Privacy Conscious:** Designed with privacy in mind, allowing for filename hashing and PII stripping (implementation details in blueprint).
+*   **Privacy Conscious:** Designed with privacy in mind, allowing for filename hashing and PII stripping.
+
+## Getting Started
+
+### Prerequisites
+1. Node.js (v20 or higher)
+2. npm
+3. VS Code
+4. A Google Gemini API Key (obtainable from [Google AI Studio](https://aistudio.google.com/app/apikey))
+
+### Installation Steps
+
+1. **Clone the Repository:**
+   ```bash
+   git clone https://github.com/HarleyCoops/VSCodeLiveShare.git
+   cd VSCodeLiveShare/vscodeliveshare
+   ```
+
+2. **Install Dependencies:**
+   ```bash
+   npm install
+   ```
+
+3. **Set Up API Key:**
+   Create a `.env` file in the project root:
+   ```
+   GEMINI_API_KEY=YOUR_API_KEY_HERE
+   ```
+   *(Note: For production/distribution, use secure storage mechanisms like VS Code's `SecretStorage` instead of `.env`)*
+
+4. **Launch the Extension in Development Mode:**
+   ```bash
+   code --extensionDevelopmentPath=/path/to/VSCodeLiveShare/vscodeliveshare
+   ```
+   Or simply open the `vscodeliveshare` folder in VS Code and press F5 to start debugging.
+
+## Running the Extension
+
+### Method 1: Manual Launch
+
+1. Open the `vscodeliveshare` folder in VS Code
+2. Press F5 to start debugging (this will open a new VS Code window with the extension loaded)
+3. In the new window, open any code file (e.g., a `.js` or `.ts` file)
+4. Open the Command Palette (Ctrl+Shift+P or Cmd+Shift+P)
+5. Run the command: `Start Gemini Live Share`
+6. You should see a notification that the session has started
+7. Start typing or move your cursor to see inline completions appear
+
+### Method 2: Using the Test Scripts
+
+The repository includes test scripts to automate the testing process:
+
+1. **Basic Test**
+   ```bash
+   cd vscodeliveshare
+   npm run test:manual
+   ```
+   This will:
+   - Open a new VS Code window
+   - Automatically run the test commands
+   - Start a Gemini session
+   - You should see notifications in the VS Code UI
+
+2. **Terminal Monitoring Test**
+   ```bash
+   cd vscodeliveshare
+   npm run test:terminal
+   ```
+   This will:
+   - Open a new VS Code window
+   - Start a Gemini session
+   - Create a test terminal
+   - Start terminal monitoring
+   - Run some test commands in the terminal
+   - Gemini will analyze the terminal output
+
+## What to Expect During Testing
+
+### Basic Functionality Test
+When you run the basic test or start the extension manually:
+
+1. You should see a notification saying "Gemini Live Share session started"
+2. As you type in a code file, you may see "ghost text" suggestions appear
+3. If you select a block of code, you can right-click and see "Gemini: Fix this code" and "Gemini: Explain this code" options in the context menu
+
+### Terminal Monitoring Test
+When you run the terminal monitoring test:
+
+1. A new terminal will open
+2. Test commands will be executed automatically
+3. Gemini will analyze the terminal output and may provide insights
+4. You can stop terminal monitoring via the Command Palette with "Stop Gemini Terminal Monitoring"
+
+## Troubleshooting
+
+If you encounter issues:
+
+1. **Check the API Key**: Ensure your API key in the `.env` file is valid. If it's expired or invalid, you'll need to get a new one from [Google AI Studio](https://aistudio.google.com/app/apikey).
+
+2. **Check the Console Output**: When running in debug mode, check the Debug Console in VS Code for error messages.
+
+3. **WebSocket Connection Issues**: If the extension fails to connect to Gemini, check your internet connection and verify the API key is valid.
+
+4. **Extension Not Activating**: Make sure you're running the command "Start Gemini Live Share" from the Command Palette.
+
+## Common Issues and Solutions
+
+1. **No inline completions appearing**:
+   - Make sure the Gemini session is started (check for the notification)
+   - Try typing more code to give Gemini context
+   - Check the Debug Console for any error messages
+
+2. **Code actions not showing up**:
+   - Make sure you've selected a block of code before right-clicking
+   - Verify the Gemini session is active
+
+3. **Terminal monitoring not working**:
+   - Make sure you've started terminal monitoring via the Command Palette
+   - Check if the terminal has enough output for Gemini to analyze
 
 ## Architecture Overview
 
@@ -39,94 +158,6 @@ graph TD
 | **Gemini Live API**   | Google's backend service providing multimodal generative AI capabilities over WebSocket.                        | `wss://generativelanguage.googleapis.com/.../BidiGenerateContent`                     |
 | **Credential Vault**  | Securely stores API keys (`GEMINI_API_KEY`) or service account tokens, preventing exposure to client code.    | VS Code `SecretStorage` API / OS Keychain                                             |
 
-## Technical Stack & Roadmap
-
-This project leverages modern web technologies and the VS Code extension API.
-
-**Phase 1: Core Implementation (Based on Blueprint)**
-
-*   **Language:** TypeScript (compiled to JavaScript)
-*   **Environment:** Node.js (v20+)
-*   **VS Code API:**
-    *   `vscode`: Core API access.
-    *   `commands`: Registering user-invokable actions (e.g., `gemini.startSession`).
-    *   `workspace`: Accessing documents, configuration, and events (`onDidChangeTextDocument`, `onDidChangeSelection`, `onDidSaveTextDocument`).
-    *   `languages`: Registering providers (`registerInlineCompletionItemProvider`, `registerCodeActionsProvider`).
-    *   `window`: Displaying messages, managing panels (`createWebviewPanel`).
-    *   `SecretStorage`: Securely handling API keys.
-    *   `TextEditor`, `TextDocument`, `Position`, `Range`, `Selection`: Representing editor state.
-    *   `InlineCompletionItemProvider`, `CodeActionProvider`: Implementing core features.
-    *   `Uri`: Handling file identifiers.
-*   **Communication:**
-    *   `ws` (Node WebSocket library): For direct WebSocket communication with the Gemini Live API.
-    *   *(Alternative)* `@google/genai`: Official Google SDK abstracting WebSocket details.
-*   **API:** Google Gemini Live API (`gemini-2.5-pro-live` model initially) via WebSocket (`wss://...`).
-*   **Build & Setup:**
-    *   `yo code`: VS Code extension scaffolding tool.
-    *   `npm`: Package management and script execution (`compile`, `watch`).
-    *   `dotenv`: Loading environment variables (`GEMINI_API_KEY`) for local development.
-*   **Configuration:**
-    *   `package.json`: Extension manifest (activation events, contributions, dependencies).
-    *   `tsconfig.json`: TypeScript compiler options.
-
-**Phase 2: Production Hardening & Enhancements**
-
-*   **Authentication:** Implement OAuth 2.0 flow or Service Account key handling for Vertex AI integration (more robust for enterprise/shared environments).
-*   **Telemetry:** Integrate basic logging (e.g., request/response token counts, latency) for monitoring usage, cost, and performance. Consider VS Code's telemetry reporting mechanisms or a dedicated logging service.
-*   **Error Handling & Fallback:**
-    *   Implement robust error handling for WebSocket connection issues, API errors (e.g., 429 rate limits with exponential backoff).
-    *   Develop a fallback mechanism to use the standard Gemini REST API if the Live API is unavailable or experiences persistent issues.
-*   **Advanced Context Management:**
-    *   Refine the `codeSnippet` logic for optimal context window usage and latency.
-    *   Implement more sophisticated diffing algorithms if needed beyond simple line slicing.
-    *   Explore techniques for summarizing or embedding larger files/projects if context limits become an issue.
-*   **UI/UX Refinements:**
-    *   Improve the chat panel interface.
-    *   Add status indicators for the Gemini connection.
-    *   Provide more granular user settings (e.g., model selection, debounce timers, completion triggers).
-*   **Security Review:** Conduct a thorough review to ensure no sensitive information (paths, keys, PII) is inadvertently leaked. Formalize privacy measures like filename hashing and comment stripping.
-*   **Testing:** Develop unit tests for the Session Broker logic and integration tests using the VS Code testing APIs.
-
-## Getting Started
-
-1.  **Prerequisites:**
-    *   Node.js (v20 or higher)
-    *   npm
-    *   VS Code
-    *   A Google Gemini API Key (obtainable from [Google AI Studio](https://aistudio.google.com/app/apikey))
-
-2.  **Clone the Repository (Once Created):**
-    ```bash
-    git clone <repository-url>
-    cd gemini-live-share
-    ```
-
-3.  **Install Dependencies:**
-    ```bash
-    npm install
-    ```
-
-4.  **Set Up API Key:**
-    Create a `.env` file in the project root:
-    ```
-    GEMINI_API_KEY=YOUR_API_KEY_HERE
-    ```
-    *(Note: For production/distribution, use secure storage mechanisms like VS Code's `SecretStorage` instead of `.env`)*
-
-5.  **Compile the Extension:**
-    ```bash
-    npm run compile
-    ```
-    *(Or `npm run watch` for automatic recompilation on changes)*
-
-6.  **Run in Development Mode:**
-    *   Open the project folder in VS Code.
-    *   Press `F5` (or navigate to `Run > Start Debugging`). This will open a new VS Code window ([Extension Development Host]).
-    *   In the new window, open any code file (e.g., a `.js` or `.ts` file).
-    *   Open the Command Palette (`Cmd/Ctrl+Shift+P`).
-    *   Run the command: `Start Gemini Live Share`.
-    *   Start typing or move your cursor to see inline completions appear.
-
 ## Key Concepts Explained
 
 *   **Session Broker:** The central piece of logic that manages the persistent WebSocket connection to Gemini for a given workspace. It ensures that editor events are efficiently streamed and responses are correctly routed back to the UI.
@@ -137,8 +168,9 @@ This project leverages modern web technologies and the VS Code extension API.
 
 ## Contributing
 
-Contributions are welcome! Please refer to `CONTRIBUTING.md` (to be created) for guidelines on reporting issues, proposing features, and submitting pull requests.
+Contributions are welcome! Please feel free to submit a Pull Request.
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file (to be created) for details.
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
