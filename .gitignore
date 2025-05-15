@@ -33,3 +33,20 @@ Thumbs.db
 
 # Optional TypeScript build info
 *.tsbuildinfo
+
+# VS Code test archives and user data (do not track binaries or test artifacts)
+vscodeliveshare/.vscode-test/
+vscodeliveshare/.vscode-test-user-data/
+
+# Ignore any VS Code binary archives or executables
+*.exe
+*.dll
+*.bin
+*.zip
+*.tar
+*.gz
+*.7z
+
+# Ignore large distribution files
+vscodeliveshare/**/*.txt
+vscodeliveshare/**/*.html
