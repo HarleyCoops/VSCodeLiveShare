@@ -1,5 +1,22 @@
 Below is an end-to-end technical blueprint for a **“Gemini Live Share”** VS Code extension written in TypeScript/JavaScript that streams the live state of your editor to Google’s Gemini Multimodal Live API and feeds the model’s responses back into the IDE as inline suggestions, code-actions, or chat.
 
+
+we are developing this project in response to this tweet: 
+
+👩‍💻 Feature request:
+
+@code
+ LiveShare, but instead of sharing the state of your IDE with a friend or a teammate, you're sharing it with 
+@googleaistudio
+'s Gemini Multimodal Live API.
+
+Anyone who builds and demos this: I'll personally send you a 
+@GoogleCloud
+ credit coupon and swag!
+
+So we want to build a live state monitor as a feature. We have build a portion of it, but are runnning into issues documented in the current @readme and codebase. 
+
+
 ---
 
 ### 1. Why the Live API is the right transport
