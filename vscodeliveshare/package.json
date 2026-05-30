@@ -64,7 +64,7 @@
   "dependencies": {
     "@google/genai": "^0.10.0",
     "dotenv": "^16.5.0",
-    "ws": "^8.18.1"
+    "ws": "^8.21.0"
   },
   "enabledApiProposals": [
     "terminalDataWriteEvent"
